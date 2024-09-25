@@ -124,6 +124,16 @@ int main() {
             break;
         }
 
+        // int cmd_count = 0;
+        // char *cmds[10][MAX_ARGS];
+        // char *pipe_tok = strtok(readBuffer, "|");
+
+        // while(pipe_tok != NULL){
+
+        //     cmd_count++;
+        //     pipe_tok = strtok(NULL, "|")
+        // }
+        
         // Split args
         parseCommand(readBuffer, args, MAX_ARGS);
 
@@ -155,11 +165,12 @@ int main() {
             return -1;
         }if(pid == 0){
             // Child process
+            // redirect input file to stdin
             if(input_fd != 0){
                 dup2(input_fd, STDIN_FILENO);
                 close(input_fd);
             }
-
+            // redirect output file to stdout
             if(output_fd != 1){
                 dup2(output_fd, STDOUT_FILENO);
                 close(output_fd);
