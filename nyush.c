@@ -5,9 +5,13 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define MAX_ARGS 100
 
+// Takes readBuffer of raw commands and parses it into array called args
 void parseCommand(char *input, char *args[], int max_args){
     int arg_count = 0;
 
@@ -50,34 +54,42 @@ int handleBuiltIn(char *args[]){
     return 0; // Indicate this is not a built in command
 }
 
-int execute_command(char *args[]){
-    // FORK
-    pid_t pid = fork();
+int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
+    for(int i = 0; args[i] != NULL; i++){
+        // if input redirection
+        if(strcmp(args[i], "<") == 0){
+            // open file as read only
+            *input_fd = open(args[i+1], O_RDONLY);
+            if(*input_fd < 0){
+                fprintf(stderr, "Error opening file");
+                return -1;
+            }
+            args[i] = NULL;
 
-    if(pid < 0){
-        printf("Error: Fork failed");
-        return -1;
-    }if(pid == 0){
-        // Child process
-
-        // Execute command
-        execvp(args[0], args);
-        // If execvp falils exit
-        fprintf(stderr, "Error: invalid command\n");
-        return -1;
-    } else{
-        // Parent wait for child PID to exit
-        int status;
-
-        pid_t waited = waitpid(pid, &status, WUNTRACED);
-        if (waited == -1) {
-            fprintf(stderr, "Error: waitpid failed");
-            return -1;
         }
+        // if output redirection overwrite
+        else if(strcmp(args[i], ">") == 0){
+            *output_fd = open(args[i+1], O_WRONLY | O_CREAT | O_TRUNC);
+            if(*output_fd < 0){
+                fprintf(stderr, "Error opening file");
+                return -1;
+            }
+            args[i] = NULL;
 
+        }
+        // redirection append
+        else if (strcmp(args[i], ">>") == 0) {
+            *output_fd = open(args[i + 1], O_WRONLY | O_CREAT | O_APPEND);
+            if(*output_fd < 0){
+                fprintf(stderr, "Error opening file");
+                return -1;
+            }
+            args[i] = NULL;
+        }
     }
-    return 1;
+    return 0;
 }
+
 
 int main() {
     char *args[MAX_ARGS];
@@ -115,6 +127,12 @@ int main() {
         // Split args
         parseCommand(readBuffer, args, MAX_ARGS);
 
+
+        // NOTE: Need to parse readbuffer for each pipe, then read each sub command into parseCommand()
+        // Use char *pipe_toks = strtok(readBuffer, "|")
+        // Keep track of command count, parseCommand into new array
+        // then for each in command count, execute with pipes
+
         if(args[0] == NULL){
             continue;
         }
@@ -123,8 +141,13 @@ int main() {
             continue;
         }
 
-        
         // FORK
+        int input_fd = 0;
+        int output_fd = 1;
+        if(handleInputOutputRedirection(args, &input_fd, &output_fd) == -1){
+            break;
+        }
+
         pid_t pid = fork();
 
         if(pid < 0){
@@ -132,8 +155,15 @@ int main() {
             return -1;
         }if(pid == 0){
             // Child process
+            if(input_fd != 0){
+                dup2(input_fd, STDIN_FILENO);
+                close(input_fd);
+            }
 
-
+            if(output_fd != 1){
+                dup2(output_fd, STDOUT_FILENO);
+                close(output_fd);
+            }
 
             // Execute command
             execvp(args[0], args);
