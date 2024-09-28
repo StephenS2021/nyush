@@ -59,7 +59,7 @@ int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
         // if input redirection
         if(strcmp(args[i], "<") == 0){
             // open file as read only
-            *input_fd = open(args[i+1], O_RDONLY);
+            *input_fd = open(args[i+1], O_RDONLY, 0777);
             if(*input_fd < 0){
                 fprintf(stderr, "Error opening file");
                 return -1;
@@ -79,7 +79,7 @@ int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
         }
         // redirection append
         else if (strcmp(args[i], ">>") == 0) {
-            *output_fd = open(args[i + 1], O_WRONLY | O_CREAT | O_APPEND);
+            *output_fd = open(args[i+1], O_WRONLY | O_CREAT | O_APPEND);
             if(*output_fd < 0){
                 fprintf(stderr, "Error opening file");
                 return -1;
@@ -125,74 +125,66 @@ int main() {
             break;
         }
 
-        // int cmd_count = 0;
-        // char *cmds[10][MAX_ARGS];
-        // char *pipe_tok = strtok(readBuffer, "|");
-
-        // while(pipe_tok != NULL){
-
-        //     cmd_count++;
-        //     pipe_tok = strtok(NULL, "|")
-        // }
-        
-        // Split args
-        parseCommand(readBuffer, args, MAX_ARGS);
-
-
-        // NOTE: Need to parse readbuffer for each pipe, then read each sub command into parseCommand()
-        // Use char *pipe_toks = strtok(readBuffer, "|")
-        // Keep track of command count, parseCommand into new array
-        // then for each in command count, execute with pipes
-
-        if(args[0] == NULL){
-            continue;
+        int cmd_count = 0;
+        char *pipe_tok = strtok(readBuffer, "|");
+        while(pipe_tok != NULL){
+            cmds[cmd_count++] = pipe_tok;
+            pipe_tok = strtok(NULL, "|");
         }
-
-        if(handleBuiltIn(args)){
-            continue;
-        }
-
-        // FORK
         int input_fd = 0;
-        int output_fd = 1;
-        if(handleInputOutputRedirection(args, &input_fd, &output_fd) == -1){
-            break;
+        int output_fd = 0;
+
+        // Iterate over each separate command
+        for( int i = 0; i < cmd_count; i++ ){
+            char *cmd = cmds[i];
+            parseCommand(cmd, args, MAX_ARGS);
+            
+            if(args[0] == NULL){
+                continue;
+            }
+
+            if(handleBuiltIn(args)){
+                continue;
+            }
+
+
+            pid_t pid = fork();
+            if(pid < 0){
+                printf("Error: Fork failed");
+                return -1;
+            }if(pid == 0){
+                // Child process
+                // redirect input file to stdin
+                handleInputOutputRedirection(args, &input_fd, &output_fd);
+                if(input_fd != 0){
+                    dup2(input_fd, STDIN_FILENO);
+                    close(input_fd);
+                }
+                // redirect output file to stdout
+                if(output_fd != 1){
+                    dup2(output_fd, STDOUT_FILENO);
+                    close(output_fd);
+                }
+
+                // Execute command
+                execvp(args[0], args);
+                // If execvp falils exit
+                fprintf(stderr, "Error: invalid command\n");
+                break;
+            } else{
+                // Parent wait for child PID to exit
+                int status;
+
+                pid_t waited = waitpid(pid, &status, WUNTRACED);
+                if (waited == -1) {
+                    printf("Error: waitpid failed");
+                    return -1;
+                }
+
+            }
+
         }
 
-        pid_t pid = fork();
-
-        if(pid < 0){
-            printf("Error: Fork failed");
-            return -1;
-        }if(pid == 0){
-            // Child process
-            // redirect input file to stdin
-            if(input_fd != 0){
-                dup2(input_fd, STDIN_FILENO);
-                close(input_fd);
-            }
-            // redirect output file to stdout
-            if(output_fd != 1){
-                dup2(output_fd, STDOUT_FILENO);
-                close(output_fd);
-            }
-
-            // Execute command
-            execvp(args[0], args);
-            // If execvp falils exit
-            fprintf(stderr, "Error: invalid command\n");
-            break;
-        } else{
-            // Parent wait for child PID to exit
-            int status;
-
-            pid_t waited = waitpid(pid, &status, WUNTRACED);
-            if (waited == -1) {
-                printf("Error: waitpid failed");
-                return -1;
-            }
-
-        }        
     }
 
     free(readBuffer);
