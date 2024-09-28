@@ -93,8 +93,9 @@ int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
 
 int main() {
     char *args[MAX_ARGS];
-
-
+    // Pipe up to 10 commands
+    char *cmds[10];
+    
     char *readBuffer;
     size_t bufferSize = 32;
     ssize_t characters;
