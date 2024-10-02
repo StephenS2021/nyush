@@ -10,6 +10,12 @@
 #include <fcntl.h>
 
 #define MAX_ARGS 100
+#define WRITE_END 1
+#define READ_END 0
+
+void sigHandler(){
+    return;
+}
 
 // Takes readBuffer of raw commands and parses it into array called args
 void parseCommand(char *input, char *args[], int max_args){
@@ -55,6 +61,7 @@ int handleBuiltIn(char *args[]){
 }
 
 int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
+    // Iterate over all args in command
     for(int i = 0; args[i] != NULL; i++){
         // if input redirection
         if(strcmp(args[i], "<") == 0){
@@ -98,6 +105,12 @@ int main() {
     size_t bufferSize = 32;
     ssize_t characters;
 
+    signal(SIGINT, sigHandler);
+    signal(SIGTSTP, sigHandler);
+    signal(SIGQUIT, sigHandler);
+
+
+
     // Malloc a buffer for characters to be read into
     // NOTE: getline can also allocate memory automatically so this is not entirely necessary
     readBuffer = (char *)malloc(bufferSize * sizeof(char));
@@ -118,7 +131,7 @@ int main() {
         if (readBuffer[characters - 1] == '\n') {
             readBuffer[characters - 1] = '\0';
         }
-
+        // If exit command
         if(strcmp(readBuffer, "exit") == 0){
             break;
         }
@@ -130,6 +143,9 @@ int main() {
             cmds[cmd_count++] = pipe_tok;
             pipe_tok = strtok(NULL, "|");
         }
+
+        // Have pipes and an input fd
+        // input_fd is all inputs from redirects or pipes
         int pipe_fd[2], input_fd = 0;
 
         // Iterate over each separate command
@@ -161,17 +177,22 @@ int main() {
                 fprintf(stderr, "Error: Fork failed");
                 return -1;
             }if(pid == 0){
-                handleInputOutputRedirection(args, &input_fd, &pipe_fd[1]);
-                
-                // If not the first command, use input from the previous pipe
+                // If first or last command, handle potential redirection
+                if(i == 0 || i == (cmd_count-1)){
+                    handleInputOutputRedirection(args, &input_fd, &pipe_fd[WRITE_END]);
+                }
+                // READING PREV COMMAND OR FILE REDIRECTION
+                // If input_fd is set from either a previous command or redirection, set it to STDIN
                 if(input_fd != 0){
                     dup2(input_fd, STDIN_FILENO);
                     close(input_fd);
                 }
-                // if not the last command, pipe the output
-                if(i < cmd_count -1){
-                    dup2(pipe_fd[1], STDOUT_FILENO);
-                    close(pipe_fd[1]);
+                
+                // If write end is set, pipe the output of command to write pipe
+                // The output will come out of the read end of the pipe which is switch onto input_fd in the parent
+                if(pipe_fd[WRITE_END] != 0){
+                    dup2(pipe_fd[WRITE_END], STDOUT_FILENO);
+                    close(pipe_fd[WRITE_END]);
                 }
 
                 // Execute command
@@ -180,6 +201,7 @@ int main() {
                 fprintf(stderr, "Error: invalid command\n");
                 break;
             } else{
+                
                 // Parent wait for child PID to exit
                 int status;
 
@@ -188,9 +210,16 @@ int main() {
                     fprintf(stderr, "Error: waitpid failed");
                     return -1;
                 }
-                // Close the write
-                close(pipe_fd[1]);
-                input_fd = pipe_fd[0];
+                // If there is no input file descriptor, close it
+                if (input_fd != 0) {
+                    close(input_fd);
+                }
+                if (i < cmd_count - 1) {
+                    // IMPORTANT: The next input will be the read end of the current pipe
+                    // Set the input_fd to the read end of the last pipe
+                    input_fd = pipe_fd[READ_END];
+                    close(pipe_fd[WRITE_END]); // Close unused write end in parent
+                }
             }
         }     
     }
