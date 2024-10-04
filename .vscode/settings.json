@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "syslimits.h": "c",
-        "limits.h": "c"
+        "limits.h": "c",
+        "types.h": "c"
     }
 }

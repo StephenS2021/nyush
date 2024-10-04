@@ -1,0 +1,5 @@
+Hello
+Hello, World
+Lorem Ipsum
+This is the end of the input.txt file
+World
