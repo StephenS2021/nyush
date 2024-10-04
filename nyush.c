@@ -13,8 +13,24 @@
 #define WRITE_END 1
 #define READ_END 0
 
+typedef struct {
+    char *command; // Job command string
+    pid_t pid;     // PID of job
+} Job;
+
+Job jobs[100];
+int job_count = 0;
+
+
 void sigHandler(){
     return;
+}
+// Used StackOverflow
+void remove_job(Job *array, int index, int array_length){
+    // Free the malloc'd command string
+    free(array[index].command);
+    int i;
+    for(i = index; i < array_length - 1; i++) array[i] = array[i + 1];
 }
 
 // Takes readBuffer of raw commands and parses it into array called args
@@ -45,17 +61,113 @@ void displayPrompt(){
 
 int handleBuiltIn(char *args[]){
     if(strcmp(args[0], "cd") == 0){
+        // If there are more than 1 arg for cd command, give error
+        for( int i = 0; args[i] != NULL; i++){
+            if(i > 1){
+                fprintf(stderr, "Error: invalid command\n");
+                return 1;
+            }
+        }
+        
         // If there is no directory given
         if(args[1] == NULL){
             fprintf(stderr, "Error: invalid command\n");
             return 1;
         }
-
-        if(chdir(args[1]) != 0){
+        else if(chdir(args[1]) != 0){
             fprintf(stderr, "Error: invalid directory\n");
+            return 1;
         }
         return 1;
     }
+    if(strcmp(args[0], "jobs") == 0){
+        // If there is another arguement given
+        if(args[1] != NULL){
+            fprintf(stderr, "Error: invalid command\n");
+            return 1;
+        }
+        for(int i = 0; i < job_count; i++){
+            printf("[%d] %s\n", (i+1), jobs[i].command);
+        }
+        return 1;
+    }
+    if(strcmp(args[0], "fg") == 0){
+        // If given more than 1 arguent, error
+        for( int i = 0; args[i] != NULL; i++){
+            if(i > 1){
+                fprintf(stderr, "Error: invalid command\n");
+                return 1;
+            }
+        }
+        // If there is no job id given
+        if(args[1] == NULL){
+            fprintf(stderr, "Error: invalid command\n");
+            return 1;
+        }
+        // Convert job id arg into integer
+        // Used help from StackOverflow
+        char *endptr;
+        long num = (strtol(args[1], &endptr, 10));
+        if(endptr == args[1]){
+            fprintf(stderr, "Error: invalid job\n");
+            return 1;
+        }
+        // Convert to zero-based indexing
+        num--;
+        // If long is not within int range, error
+        if(num > INT_MAX || num < INT_MIN){
+            fprintf(stderr, "Error: invalid job\n");
+            return 1;
+        }
+        // Safely cast to int
+        int selectedJobID = (int) num;
+
+        // If selected ID is within job_count, attempt to resume job
+        if(job_count > 0 && selectedJobID < job_count && selectedJobID > -1){
+            if(kill(jobs[selectedJobID].pid, SIGCONT) != 0){
+                fprintf(stderr, "Error: could not resume job");
+                return 1;
+            }
+            // If the job successfully resumes
+            else{
+                char jobString[1024];
+                int status;
+                pid_t pid = waitpid(jobs[selectedJobID].pid, &status, WUNTRACED);
+                strcpy(jobString, jobs[selectedJobID].command);
+
+                remove_job(jobs, selectedJobID, job_count);
+                job_count--;
+
+                if(pid == -1){
+                    fprintf(stderr, "Error: waitpid failed\n");
+                    return 1;
+                }
+                // If job gets suspended again, add it back to the list
+                if(WIFSTOPPED(status)){
+                    
+                    
+                    
+                    // Allocate space for the job string
+                    jobs[job_count].command = (char *)malloc(strlen(jobString) + 1);
+                    if(jobs[job_count].command != NULL){
+                        // Set job string and PID
+                        strcpy(jobs[job_count].command, jobString);
+                        jobs[job_count].pid = pid;
+                        job_count++;
+                    }else{
+                        fprintf(stderr, "Error: Failed to allocate memory for job\n");
+                    }
+                    
+                }
+            }
+            
+        }else{
+            fprintf(stderr, "Error: invalid job\n");
+            return 1;
+        }
+        return 1;
+    }
+
 
     return 0; // Indicate this is not a built in command
 }
@@ -95,11 +207,24 @@ int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
     return 0;
 }
 
+// Reads args array into a string
+void argsToString(char *args[], char *result){
+    result[0] = '\0'; // Empty result array
+    for(int i = 0; args[i] != NULL; i++){
+        strcat(result, args[i]);
+        // If not the last command add a space
+        if(args[i+1] != NULL){
+            strcat(result, " ");
+        }
+    }
+}
+
 
 int main() {
     char *args[MAX_ARGS];
     // Pipe up to 10 commands
     char *cmds[10];
+
 
     char *readBuffer;
     size_t bufferSize = 32;
@@ -115,7 +240,7 @@ int main() {
     // NOTE: getline can also allocate memory automatically so this is not entirely necessary
     readBuffer = (char *)malloc(bufferSize * sizeof(char));
     if(readBuffer == NULL){
-        printf("Error: Unable to allocate buffer");
+        fprintf(stderr,"Error: Unable to allocate buffer");
         return -1;
     }
 
@@ -133,6 +258,11 @@ int main() {
         }
         // If exit command
         if(strcmp(readBuffer, "exit") == 0){
+            if(job_count != 0){
+                fprintf(stderr, "Error: there are suspended jobs\n");
+                continue;
+            }
+            // If jobs, dont exit
             break;
         }
 
@@ -155,9 +285,16 @@ int main() {
 
             // if no command, exit
             if(args[0] == NULL){
+                // If there is no command and there are pipes, error
+                if(cmd_count > 0){
+                    fprintf(stderr, "Syntax error\n");
+                    cmd_count = -1;
+                }
                 continue;
             }
             // handle built in
+            // IF HANDLE BUILT IN IS TRUE SHOULD I HANDLE PIPES AFTERWARD??? OR SET cmd_count TO -1
+            // TO CANCEL OTHER COMMANDS?
             if(handleBuiltIn(args)){
                 continue;
             }
@@ -177,19 +314,21 @@ int main() {
                 fprintf(stderr, "Error: Fork failed");
                 return -1;
             }if(pid == 0){
+                
                 // If first or last command, handle potential redirection
+                // Maybe if last command (i==cmd_count-1), dont pass an inputfd? In case i/o redirect overwrites it
                 if(i == 0 || i == (cmd_count-1)){
                     handleInputOutputRedirection(args, &input_fd, &pipe_fd[WRITE_END]);
                 }
                 // READING PREV COMMAND OR FILE REDIRECTION
-                // If input_fd is set from either a previous command or redirection, set it to STDIN
+                // If input_fd is set from either a previous command or redirection ^, set it to STDIN
                 if(input_fd != 0){
                     dup2(input_fd, STDIN_FILENO);
                     close(input_fd);
                 }
                 
                 // If write end is set, pipe the output of command to write pipe
-                // The output will come out of the read end of the pipe which is switch onto input_fd in the parent
+                // The output will come out of the READ_END of the pipe which is switched onto input_fd in the parent
                 if(pipe_fd[WRITE_END] != 0){
                     dup2(pipe_fd[WRITE_END], STDOUT_FILENO);
                     close(pipe_fd[WRITE_END]);
@@ -199,29 +338,55 @@ int main() {
                 execvp(args[0], args);
                 // If execvp falils exit
                 fprintf(stderr, "Error: invalid command\n");
-                break;
+                exit(1);
             } else{
                 
                 // Parent wait for child PID to exit
                 int status;
 
                 pid_t waited = waitpid(pid, &status, WUNTRACED);
+                
                 if (waited == -1) {
                     fprintf(stderr, "Error: waitpid failed");
                     return -1;
                 }
+
+                if(WIFSTOPPED(status)){
+                    char jobString[1024];
+                    argsToString(args, jobString);
+                    
+                    // Allocate space for the job string
+                    jobs[job_count].command = (char *)malloc(strlen(jobString) + 1);
+                    if(jobs[job_count].command != NULL){
+                        // Set job string and PID
+                        strcpy(jobs[job_count].command, jobString);
+                        jobs[job_count].pid = pid;
+                        job_count++;
+                    }else{
+                        fprintf(stderr, "Error: Failed to allocate memory for job\n");
+                    }
+                }
+
                 // If there is no input file descriptor, close it
+                // I am not sure why there would be an input in the parent
+                // We are going to set it to the READ_END if its not the last command anyway
                 if (input_fd != 0) {
                     close(input_fd);
                 }
+                // If not the last command:
                 if (i < cmd_count - 1) {
-                    // IMPORTANT: The next input will be the read end of the current pipe
+                    // IMPORTANT: The next input will be the read end of the current pipe i.e. what just was output
                     // Set the input_fd to the read end of the last pipe
                     input_fd = pipe_fd[READ_END];
                     close(pipe_fd[WRITE_END]); // Close unused write end in parent
                 }
             }
         }     
+    }
+    // Free any other command strings
+    // In case any remain
+    for(int i = 0; i < job_count; i++){
+        free(jobs[i].command);
     }
 
     free(readBuffer);
