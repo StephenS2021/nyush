@@ -177,19 +177,29 @@ int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
     for(int i = 0; args[i] != NULL; i++){
         // if input redirection
         if(strcmp(args[i], "<") == 0){
+            if(args[i+1] == NULL){
+                fprintf(stderr, "Error: invalid command\n");
+                return -1;
+            }
+
             // open file as read only
             *input_fd = open(args[i+1], O_RDONLY);
             if(*input_fd < 0){
-                fprintf(stderr, "Error opening file");
+                fprintf(stderr, "Error: invalid file\n");
                 return -1;
             }
             args[i] = NULL;
         }
         // if output redirection overwrite
         else if(strcmp(args[i], ">") == 0){
+            if(args[i+1] == NULL){
+                fprintf(stderr, "Error: invalid command\n");
+                return -1;
+            }
+
             *output_fd = open(args[i+1], O_WRONLY | O_CREAT | O_TRUNC);
             if(*output_fd < 0){
-                fprintf(stderr, "Error opening file");
+                fprintf(stderr, "Error: could not open file\n");
                 return -1;
             }
             args[i] = NULL;
@@ -198,10 +208,14 @@ int handleInputOutputRedirection(char *args[], int *input_fd, int *output_fd){
         else if (strcmp(args[i], ">>") == 0) {
             *output_fd = open(args[i + 1], O_WRONLY | O_CREAT | O_APPEND);
             if(*output_fd < 0){
-                fprintf(stderr, "Error opening file");
+                fprintf(stderr, "Error: could not open file\n");
                 return -1;
             }
             args[i] = NULL;
+        }
+        else if (strcmp(args[i], "<<") == 0){
+            fprintf(stderr, "Error: invalid command\n");
+            return -1;
         }
     }
     return 0;
@@ -293,8 +307,6 @@ int main() {
                 continue;
             }
             // handle built in
-            // IF HANDLE BUILT IN IS TRUE SHOULD I HANDLE PIPES AFTERWARD??? OR SET cmd_count TO -1
-            // TO CANCEL OTHER COMMANDS?
             if(handleBuiltIn(args)){
                 continue;
             }
@@ -318,7 +330,9 @@ int main() {
                 // If first or last command, handle potential redirection
                 // Maybe if last command (i==cmd_count-1), dont pass an inputfd? In case i/o redirect overwrites it
                 if(i == 0 || i == (cmd_count-1)){
-                    handleInputOutputRedirection(args, &input_fd, &pipe_fd[WRITE_END]);
+                    if(handleInputOutputRedirection(args, &input_fd, &pipe_fd[WRITE_END]) == -1){
+                        exit(1);
+                    }
                 }
                 // READING PREV COMMAND OR FILE REDIRECTION
                 // If input_fd is set from either a previous command or redirection ^, set it to STDIN
