@@ -378,8 +378,24 @@ int main() {
                     close(pipe_fd[WRITE_END]);
                 }
 
+
+                char path[PATH_MAX];
+                // If slash at the beginning specifying absolute path, run program at this location
+                // Usage of snprintf to create char array from variables taken from StackOverflow
+                if(args[0][0] == '/'){
+                    snprintf(path, sizeof(path), "%s", args[0]);
+                }
+                // If there is a slash somewhere in the command
+                else if(strchr(args[0], '/') != 0){
+                    snprintf(path, sizeof(path), "./%s", args[0]);
+
+                }
+                // If no directory is specified, execute in /usr/bin
+                else{
+                    snprintf(path, sizeof(path), "/usr/bin/%s", args[0]);
+                }
                 // Execute command
-                execvp(args[0], args);
+                execv(path, args);
                 // If execvp falils exit
                 fprintf(stderr, "Error: invalid program\n");
                 exit(1);
