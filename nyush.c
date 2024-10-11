@@ -10,6 +10,7 @@
 #include <fcntl.h>
 
 #define MAX_ARGS 100
+#define MAX_CMDS 100
 #define WRITE_END 1
 #define READ_END 0
 
@@ -59,7 +60,28 @@ void displayPrompt(){
     }
 }
 
-int handleBuiltIn(char *args[]){
+int handleBuiltIn(char *args[], int cmd_count){
+    // If exit command
+    if(strcmp(args[0], "exit") == 0){
+        if(args[1] != NULL){
+            fprintf(stderr, "Error: invalid command\n");
+            return 1;
+        }
+        // If there are more commands, error
+        if((cmd_count-1) > 0){
+            fprintf(stderr, "Error: invalid command\n");
+            return 1;
+        }
+        // If jobs, dont exit
+        else if(job_count != 0){
+            fprintf(stderr, "Error: there are suspended jobs\n");
+            return 1;
+        }
+        else{
+            exit(EXIT_SUCCESS);
+        }
+        
+    }
     if(strcmp(args[0], "cd") == 0){
         // If there are more than 1 arg for cd command, give error
         for( int i = 0; args[i] != NULL; i++){
@@ -68,7 +90,6 @@ int handleBuiltIn(char *args[]){
                 return 1;
             }
         }
-        
         // If there is no directory given
         if(args[1] == NULL){
             fprintf(stderr, "Error: invalid command\n");
@@ -144,9 +165,6 @@ int handleBuiltIn(char *args[]){
                 }
                 // If job gets suspended again, add it back to the list
                 if(WIFSTOPPED(status)){
-                    
-                    
-                    
                     // Allocate space for the job string
                     jobs[job_count].command = (char *)malloc(strlen(jobString) + 1);
                     if(jobs[job_count].command != NULL){
@@ -238,7 +256,8 @@ int main() {
     char *args[MAX_ARGS];
     // Pipe up to 10 commands
     char *cmds[10];
-
+    pid_t child_pids[MAX_CMDS]; // Array to store PIDs
+    int child_count = 0;
 
     char *readBuffer;
     size_t bufferSize = 32;
@@ -266,25 +285,43 @@ int main() {
         if(characters == -1){
             break;
         }
+
         // removing newline char if it is in readBuffer
         if (readBuffer[characters - 1] == '\n') {
             readBuffer[characters - 1] = '\0';
         }
-        // If exit command
-        if(strcmp(readBuffer, "exit") == 0){
-            if(job_count != 0){
-                fprintf(stderr, "Error: there are suspended jobs\n");
-                continue;
+
+        // Check if command is just spaces
+        // This is just so no error is thrown when we check for empty spaces in the pipe tokenizing
+        // Not super necessary
+        int fullOfSpaces = 1;
+        for (int i = 0; readBuffer[i] != '\0'; i++) {
+            if (!isspace(readBuffer[i])) {
+                fullOfSpaces = 0;
+                break;
             }
-            // If jobs, dont exit
-            break;
+        }
+        if(fullOfSpaces){ // if command is just spaces, create a new prompt
+            continue;
+        }
+
+        // If command begins or ends with a pipe give an error
+        if(readBuffer[0] == '|' || ( strlen(readBuffer) > 0 && readBuffer[strlen(readBuffer) - 1] == '|')){
+            fprintf(stderr, "Error: invalid command\n");
+            continue;
         }
 
         // Split commands by pipe into cmds array
         int cmd_count = 0;
         char *pipe_tok = strtok(readBuffer, "|");
         while(pipe_tok != NULL){
+            if(strcmp(pipe_tok, " ") == 0 || strcmp(pipe_tok, "") == 0){
+                cmd_count = 0;
+                fprintf(stderr, "Error: invalid command\n");
+                break;
+            }
             cmds[cmd_count++] = pipe_tok;
+            // Move to next command
             pipe_tok = strtok(NULL, "|");
         }
 
@@ -296,19 +333,13 @@ int main() {
         for( int i = 0; i < cmd_count; i++ ){
             // Split args
             parseCommand(cmds[i], args, MAX_ARGS);
-
             // if no command, exit
             if(args[0] == NULL){
-                // If there is no command and there are pipes, error
-                if(cmd_count > 0){
-                    fprintf(stderr, "Syntax error\n");
-                    cmd_count = -1;
-                }
-                continue;
+                break;
             }
-            // handle built in
-            if(handleBuiltIn(args)){
-                continue;
+            // if handle built in is true, exit for loop
+            if(handleBuiltIn(args, cmd_count)){
+                break;
             }
 
             // If there is more than one command, create pipes
@@ -326,7 +357,6 @@ int main() {
                 fprintf(stderr, "Error: Fork failed");
                 return -1;
             }if(pid == 0){
-                
                 // If first or last command, handle potential redirection
                 // Maybe if last command (i==cmd_count-1), dont pass an inputfd? In case i/o redirect overwrites it
                 if(i == 0 || i == (cmd_count-1)){
@@ -351,35 +381,11 @@ int main() {
                 // Execute command
                 execvp(args[0], args);
                 // If execvp falils exit
-                fprintf(stderr, "Error: invalid command\n");
+                fprintf(stderr, "Error: invalid program\n");
                 exit(1);
             } else{
-                
                 // Parent wait for child PID to exit
-                int status;
-
-                pid_t waited = waitpid(pid, &status, WUNTRACED);
-                
-                if (waited == -1) {
-                    fprintf(stderr, "Error: waitpid failed");
-                    return -1;
-                }
-
-                if(WIFSTOPPED(status)){
-                    char jobString[1024];
-                    argsToString(args, jobString);
-                    
-                    // Allocate space for the job string
-                    jobs[job_count].command = (char *)malloc(strlen(jobString) + 1);
-                    if(jobs[job_count].command != NULL){
-                        // Set job string and PID
-                        strcpy(jobs[job_count].command, jobString);
-                        jobs[job_count].pid = pid;
-                        job_count++;
-                    }else{
-                        fprintf(stderr, "Error: Failed to allocate memory for job\n");
-                    }
-                }
+                child_pids[child_count++] = pid;
 
                 // If there is no input file descriptor, close it
                 // I am not sure why there would be an input in the parent
@@ -395,7 +401,34 @@ int main() {
                     close(pipe_fd[WRITE_END]); // Close unused write end in parent
                 }
             }
-        }     
+        }
+        // WAITPID HERE
+        for(int i = 0; i < child_count; i++){
+             int status;
+            pid_t waited = waitpid(child_pids[i], &status, WUNTRACED);
+            if (waited == -1) {
+                fprintf(stderr, "Error: waitpid failed");
+                return -1;
+            }
+
+            if(WIFSTOPPED(status)){
+                char jobString[1024];
+                argsToString(args, jobString);
+                
+                // Allocate space for the job string
+                jobs[job_count].command = (char *)malloc(strlen(jobString) + 1);
+                if(jobs[job_count].command != NULL){
+                    // Set job string and PID
+                    strcpy(jobs[job_count].command, jobString);
+                    jobs[job_count].pid = child_pids[i];
+                    job_count++;
+                }else{
+                    fprintf(stderr, "Error: Failed to allocate memory for job\n");
+                }
+            }
+        }
+        child_count=0;
+
     }
     // Free any other command strings
     // In case any remain
